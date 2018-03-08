@@ -2846,13 +2846,19 @@ function send_confirm_account_action_email( $action_name, $action_description = 
 		$user = get_user_by( 'email', $email );
 	}
 
-	// We could be dealing with a registered user account, or a visitor.
-	$is_registered_user = $user && ! is_wp_error( $user );
-	$uid                = $is_registered_user ? $user->ID : hash( 'sha256', $email );
-	$confirm_key        = get_confirm_account_action_key( $action_name, $email );
+	$confirm_key = get_confirm_account_action_key( $action_name, $email );
 
 	if ( is_wp_error( $confirm_key ) ) {
 		return $confirm_key;
+	}
+
+	// We could be dealing with a registered user account, or a visitor.
+	$is_registered_user = $user && ! is_wp_error( $user );
+
+	if ( $is_registered_user ) {
+		$uid = $user->ID;
+	} else {
+		$uid = function_exists( 'hash' ) ? hash( 'sha256', $email ) : sha1( $email );
 	}
 
 	// Prepare the email content.
@@ -2971,7 +2977,8 @@ function get_confirm_account_action_key( $action_name, $email ) {
 	if ( $is_registered_user ) {
 		$key_saved = (bool) update_user_meta( $user->ID, '_account_action_' . $action_name, implode( ':', array( time(), $hashed_key ) ) );
 	} else {
-		$key_saved = (bool) update_site_option( '_account_action_' . hash( 'sha256', $email ) . '_' . $action_name, implode( ':', array( time(), $hashed_key, $email ) ) );
+		$uid       = function_exists( 'hash' ) ? hash( 'sha256', $email ) : sha1( $email );
+		$key_saved = (bool) update_site_option( '_account_action_' . $uid . '_' . $action_name, implode( ':', array( time(), $hashed_key, $email ) ) );
 	}
 
 	if ( false === $key_saved ) {
