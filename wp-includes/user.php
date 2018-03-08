@@ -2815,17 +2815,25 @@ function new_user_email_admin_notice() {
  *
  * @since 5.0.0
  *
- * @param string $action_name        Name of the action that is being confirmed.
- * @param string $action_description User facing description of the action they will be confirming.
- * @param string $email              User email address. This can be the address of a registered or non-registered user. Defaults to logged in user email address.
+ * @param string $email              User email address. This can be the address of a registered or non-registered user. Defaults to logged in user email address. 
+ * @param string $action_name        Name of the action that is being confirmed. Defaults to 'confirm_email'.
+ * @param string $action_description User facing description of the action they will be confirming. Defaults to "confirm your email address".
  * @return WP_Error|bool Will return true/false based on the success of sending the email, or a WP_Error object.
  */
-function wp_send_account_verification_key( $action_name, $action_description = '', $email = '' ) {
+function wp_send_account_verification_key( $email = '', $action_name = '', $action_description = '' ) {
+	if ( ! function_exists( 'wp_get_current_user' ) ) {
+		return new WP_Error( 'invalid', __( 'This function cannot be used before init.' ) );
+	}
+
 	$action_name        = sanitize_key( $action_name );
 	$action_description = wp_kses_post( $action_description );
 
 	if ( empty( $action_name ) ) {
-		return new WP_Error( 'invalid_action', __( 'Invalid action' ) );
+		$action_name = 'confirm_email';
+	}
+
+	if ( empty( $action_description ) ) {
+		$action_description = __( 'Confirm your email address.' );
 	}
 
 	if ( empty( $email ) ) {
@@ -2845,7 +2853,7 @@ function wp_send_account_verification_key( $action_name, $action_description = '
 		$user = get_user_by( 'email', $email );
 	}
 
-	$confirm_key = wp_get_account_verification_key( $action_name, $email );
+	$confirm_key = wp_get_account_verification_key( $email, $action_name );
 
 	if ( is_wp_error( $confirm_key ) ) {
 		return $confirm_key;
@@ -2860,11 +2868,6 @@ function wp_send_account_verification_key( $action_name, $action_description = '
 		$uid = function_exists( 'hash' ) ? hash( 'sha256', $email ) : sha1( $email );
 	}
 
-	// Prepare the email content.
-	if ( ! $action_description ) {
-		$action_description = $action_name;
-	}
-
 	/* translators: Do not translate DESCRIPTION, CONFIRM_URL, EMAIL, SITENAME, SITEURL: those are placeholders. */
 	$email_text = __(
 		'Howdy,
@@ -2873,7 +2876,7 @@ An account linked to your email address has requested to:
 
      ###DESCRIPTION###
 
-To confirm this, please click on the following link:
+To do this, please click on the following link:
 ###CONFIRM_URL###
 
 You can safely ignore and delete this email if you do not want to
@@ -2942,11 +2945,11 @@ All at ###SITENAME###
  *
  * @since 5.0.0
  *
- * @param string $action_name Name of the action this key is being generated for.
  * @param string $email       User email address. This can be the address of a registered or non-registered user.
+ * @param string $action_name Name of the action this key is being generated for.
  * @return string|WP_Error Confirmation key on success. WP_Error on error.
  */
-function wp_get_account_verification_key( $action_name, $email ) {
+function wp_get_account_verification_key( $email, $action_name ) {
 	global $wp_hasher;
 
 	if ( ! is_email( $email ) ) {
@@ -2992,12 +2995,12 @@ function wp_get_account_verification_key( $action_name, $email ) {
  *
  * @since 5.0.0
  *
- * @param string $action_name Name of the action this key is being generated for.
  * @param string $key         Key to confirm.
  * @param string $uid         Email hash or user ID.
+ * @param string $action_name Name of the action this key is being generated for.
  * @return array|WP_Error WP_Error on failure, action name and user email address on success.
  */
-function wp_check_account_verification_key( $action_name, $key, $uid ) {
+function wp_check_account_verification_key( $key, $uid, $action_name ) {
 	global $wp_hasher;
 
 	if ( empty( $action_name ) || empty( $key ) || empty( $uid ) ) {
