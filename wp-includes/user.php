@@ -2818,10 +2818,9 @@ function new_user_email_admin_notice() {
  * @param string $action_name        Name of the action that is being confirmed.
  * @param string $action_description User facing description of the action they will be confirming.
  * @param string $email              User email address. This can be the address of a registered or non-registered user. Defaults to logged in user email address.
- *
- * @return WP_ERROR|bool Will return true/false based on the success of sending the email, or a WP_Error object.
+ * @return WP_Error|bool Will return true/false based on the success of sending the email, or a WP_Error object.
  */
-function send_confirm_account_action_email( $action_name, $action_description = '', $email = '' ) {
+function wp_send_account_verification_key( $action_name, $action_description = '', $email = '' ) {
 	$action_name        = sanitize_key( $action_name );
 	$action_description = wp_kses_post( $action_description );
 
@@ -2846,7 +2845,7 @@ function send_confirm_account_action_email( $action_name, $action_description = 
 		$user = get_user_by( 'email', $email );
 	}
 
-	$confirm_key = get_confirm_account_action_key( $action_name, $email );
+	$confirm_key = wp_get_account_verification_key( $action_name, $email );
 
 	if ( is_wp_error( $confirm_key ) ) {
 		return $confirm_key;
@@ -2870,12 +2869,11 @@ function send_confirm_account_action_email( $action_name, $action_description = 
 	$email_text = __(
 		'Howdy,
 
-An account linked to your email address has requested to perform
-the following action:
+An account linked to your email address has requested to:
 
      ###DESCRIPTION###
 
-To confirm this action, please click on the following link:
+To confirm this, please click on the following link:
 ###CONFIRM_URL###
 
 You can safely ignore and delete this email if you do not want to
@@ -2893,7 +2891,7 @@ All at ###SITENAME###
 		'email'       => $email,
 		'description' => $action_description,
 		'confirm_url' => add_query_arg( array(
-			'action'         => 'emailconfirm',
+			'action'         => 'verifyaccount',
 			'confirm_action' => $action_name,
 			'uid'            => $uid,
 			'confirm_key'    => $confirm_key,
@@ -2913,6 +2911,8 @@ All at ###SITENAME###
 	 * ###SITENAME###           The name of the site.
 	 * ###SITEURL###            The URL to the site.
 	 *
+	 * @since 5.0.0
+	 * 
 	 * @param string $email_text     Text in the email.
 	 * @param array  $email_data {
 	 *     Data relating to the account action email.
@@ -2925,7 +2925,7 @@ All at ###SITENAME###
 	 *     @type string $siteurl     The site URL sending the mail.
 	 * }
 	 */
-	$content = apply_filters( 'confirm_account_action_email_content', $email_text, $email_data );
+	$content = apply_filters( 'account_verification_email_content', $email_text, $email_data );
 
 	$content = str_replace( '###DESCRIPTION###', $email_data['description'], $content );
 	$content = str_replace( '###CONFIRM_URL###', esc_url_raw( $email_data['confirm_url'] ), $content );
@@ -2934,7 +2934,7 @@ All at ###SITENAME###
 	$content = str_replace( '###SITEURL###', esc_url_raw( $email_data['siteurl'] ), $content );
 
 	/* translators: %s Site name. */
-	return wp_mail( $email_data['email'], sprintf( __( '[%s] Confirm Account Action' ), wp_specialchars_decode( get_option( 'blogname' ), ENT_QUOTES ) ), $content );
+	return wp_mail( $email_data['email'], sprintf( __( '[%s] Confirm Action' ), wp_specialchars_decode( get_option( 'blogname' ), ENT_QUOTES ) ), $content );
 }
 
 /**
@@ -2944,10 +2944,9 @@ All at ###SITENAME###
  *
  * @param string $action_name Name of the action this key is being generated for.
  * @param string $email       User email address. This can be the address of a registered or non-registered user.
- *
  * @return string|WP_Error Confirmation key on success. WP_Error on error.
  */
-function get_confirm_account_action_key( $action_name, $email ) {
+function wp_get_account_verification_key( $action_name, $email ) {
 	global $wp_hasher;
 
 	if ( ! is_email( $email ) ) {
@@ -2975,14 +2974,14 @@ function get_confirm_account_action_key( $action_name, $email ) {
 	$hashed_key = $wp_hasher->HashPassword( $key );
 
 	if ( $is_registered_user ) {
-		$key_saved = (bool) update_user_meta( $user->ID, '_account_action_' . $action_name, implode( ':', array( time(), $hashed_key ) ) );
+		$key_saved = (bool) update_user_meta( $user->ID, '_verify_' . $action_name, implode( ':', array( time(), $hashed_key ) ) );
 	} else {
 		$uid       = function_exists( 'hash' ) ? hash( 'sha256', $email ) : sha1( $email );
-		$key_saved = (bool) update_site_option( '_account_action_' . $uid . '_' . $action_name, implode( ':', array( time(), $hashed_key, $email ) ) );
+		$key_saved = (bool) update_site_option( '_verify_' . $uid . '_' . $action_name, implode( ':', array( time(), $hashed_key, $email ) ) );
 	}
 
 	if ( false === $key_saved ) {
-		return new WP_Error( 'no_confirm_account_action_key_update', __( 'Could not save confirm account action key to database.' ) );
+		return new WP_Error( 'no_account_verification_key_update', __( 'Could not save confirm account action key to database.' ) );
 	}
 
 	return $key;
@@ -2996,78 +2995,81 @@ function get_confirm_account_action_key( $action_name, $email ) {
  * @param string $action_name Name of the action this key is being generated for.
  * @param string $key         Key to confirm.
  * @param string $uid         Email hash or user ID.
- *
  * @return array|WP_Error WP_Error on failure, action name and user email address on success.
  */
-function check_confirm_account_action_key( $action_name, $key, $uid ) {
+function wp_check_account_verification_key( $action_name, $key, $uid ) {
 	global $wp_hasher;
 
-	if ( ! empty( $action_name ) && ! empty( $key ) && ! empty( $uid ) ) {
-		$user = false;
+	if ( empty( $action_name ) || empty( $key ) || empty( $uid ) ) {
+		return new WP_Error( 'invalid_key', __( 'Invalid key' ) );
+	}
 
-		if ( is_numeric( $uid ) ) {
-			$user = get_user_by( 'id', absint( $uid ) );
+	$user = false;
+
+	if ( is_numeric( $uid ) ) {
+		$user = get_user_by( 'id', absint( $uid ) );
+	}
+
+	// We could be dealing with a registered user account, or a visitor.
+	$is_registered_user = $user && ! is_wp_error( $user );
+	$key_request_time = '';
+	$saved_key        = '';
+	$email            = '';
+
+	if ( empty( $wp_hasher ) ) {
+		require_once ABSPATH . WPINC . '/class-phpass.php';
+		$wp_hasher = new PasswordHash( 8, true );
+	}
+
+	// Get the saved key from the database.
+	if ( $is_registered_user ) {
+		$confirm_action_data = get_user_meta( $user->ID, '_verify_' . $action_name, true );
+		$email               = $user->user_email;
+
+		if ( false !== strpos( $confirm_action_data, ':' ) ) {
+			list( $key_request_time, $saved_key ) = explode( ':', $confirm_action_data, 2 );
 		}
+	} else {
+		$confirm_action_data = get_site_option( '_verify_' . $uid . '_' . $action_name, '' );
 
-		// We could be dealing with a registered user account, or a visitor.
-		$is_registered_user = $user && ! is_wp_error( $user );
-		$key_request_time = '';
-		$saved_key        = '';
-		$email            = '';
-
-		if ( empty( $wp_hasher ) ) {
-			require_once ABSPATH . WPINC . '/class-phpass.php';
-			$wp_hasher = new PasswordHash( 8, true );
-		}
-
-		// Get the saved key from the database.
-		if ( $is_registered_user ) {
-			$confirm_action_data = get_user_meta( $user->ID, '_account_action_' . $action_name, true );
-			$email               = $user->user_email;
-
-			if ( false !== strpos( $confirm_action_data, ':' ) ) {
-				list( $key_request_time, $saved_key ) = explode( ':', $confirm_action_data, 2 );
-			}
-		} else {
-			$confirm_action_data = get_site_option( '_account_action_' . $uid . '_' . $action_name, '' );
-
-			if ( false !== strpos( $confirm_action_data, ':' ) ) {
-				list( $key_request_time, $saved_key, $email ) = explode( ':', $confirm_action_data, 3 );
-			}
-		}
-
-		if ( ! $saved_key ) {
-			return new WP_Error( 'invalid_key', __( 'Invalid key' ) );
-		}
-
-		/**
-		 * Filters the expiration time of confirm keys.
-		 *
-		 * @param int $expiration The expiration time in seconds.
-		 */
-		$expiration_duration = apply_filters( 'account_action_expiration', DAY_IN_SECONDS );
-		$expiration_time     = $key_request_time + $expiration_duration;
-
-		if ( $wp_hasher->CheckPassword( $key, $saved_key ) ) {
-			if ( $expiration_time && time() < $expiration_time ) {
-				$return = array(
-					'action' => $action_name,
-					'email'  => $email,
-				);
-			} else {
-				$return = new WP_Error( 'expired_key', __( 'The confirmation email has expired.' ) );
-			}
-
-			// Clean up stored keys.
-			if ( $is_registered_user ) {
-				delete_user_meta( $user->ID, '_account_action_' . $action_name );
-			} else {
-				delete_site_option( '_account_action_' . $uid . '_' . $action_name );
-			}
-
-			return $return;
+		if ( false !== strpos( $confirm_action_data, ':' ) ) {
+			list( $key_request_time, $saved_key, $email ) = explode( ':', $confirm_action_data, 3 );
 		}
 	}
 
-	return new WP_Error( 'invalid_key', __( 'Invalid key' ) );
+	if ( ! $saved_key ) {
+		return new WP_Error( 'invalid_key', __( 'Invalid key' ) );
+	}
+
+	/**
+	 * Filters the expiration time of confirm keys.
+	 *
+	 * @since 5.0.0
+	 * 
+	 * @param int $expiration The expiration time in seconds.
+	 */
+	$expiration_duration = apply_filters( 'account_verification_expiration', DAY_IN_SECONDS );
+	$expiration_time     = $key_request_time + $expiration_duration;
+
+	if ( ! $wp_hasher->CheckPassword( $key, $saved_key ) ) {
+		return new WP_Error( 'invalid_key', __( 'Invalid key' ) );
+	}
+
+	if ( $expiration_time && time() < $expiration_time ) {
+		$return = array(
+			'action' => $action_name,
+			'email'  => $email,
+		);
+	} else {
+		$return = new WP_Error( 'expired_key', __( 'The confirmation email has expired.' ) );
+	}
+
+	// Clean up stored keys.
+	if ( $is_registered_user ) {
+		delete_user_meta( $user->ID, '_verify_' . $action_name );
+	} else {
+		delete_site_option( '_verify_' . $uid . '_' . $action_name );
+	}
+
+	return $return;
 }
